@@ -18,6 +18,9 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Clone Azure REST API Specs
+        run: git clone --depth 1 https://github.com/Azure/azure-rest-api-specs.git
+
       - name: Install dependencies
         run: pip install -r requirements.txt
 
