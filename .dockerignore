@@ -1,0 +1,31 @@
+# Git and Docker files
+.git
+.gitignore
+.dockerignore
+Dockerfile
+docker-compose.yml
+
+# Python virtual environment and cache
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment files
+.env
+.env.*
+
+# Azure specs directory
+azure-rest-api-specs/
+
+# Documentation
+*.md
+
+# Tests and scripts
+tests/
+scripts/
+
+# IDE files
+.idea/
+.vscode/
