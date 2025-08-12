@@ -1,0 +1,75 @@
+name: CI and AI Code Review
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  lint_and_test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Lint code (placeholder)
+        run: echo "Linter placeholder - e.g., run flake8 or ruff here"
+
+      - name: Run tests
+        run: pytest
+
+  ai_code_review:
+    needs: lint_and_test
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history for a proper diff
+
+      - name: Get PR diff
+        id: diff
+        run: |
+          # Use the SHAs from the event payload for accuracy
+          git fetch origin ${{ github.event.pull_request.base.sha }}
+          DIFF_CONTENT=$(git diff ${{ github.event.pull_request.base.sha }} ${{ github.sha }})
+          echo "diff_content<<EOF" >> $GITHUB_OUTPUT
+          echo "$DIFF_CONTENT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Get AI Code Review
+        id: review
+        run: |
+          # Use jq to safely construct the JSON payload
+          JSON_PAYLOAD=$(jq -n \
+            --arg prompt "As an expert code reviewer, analyze this pull request diff. Provide concise, actionable feedback on potential bugs, style issues, and performance improvements. Suggest a priority (Low, Medium, High) for addressing your comments." \
+            --arg diff "${{ steps.diff.outputs.diff_content }}" \
+            '{contents: [{parts: [{text: ($prompt + "\n\nDiff:\n\n" + $diff)}]}]}')
+
+          # Call the Gemini API and save the response
+          API_RESPONSE=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${{ secrets.GEMINI_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "$JSON_PAYLOAD")
+
+          # Extract the text content and save it to a file for the next step
+          echo "$API_RESPONSE" | jq -r '.candidates[0].content.parts[0].text' > review_comment.md
+
+      - name: Post review comment on PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.number }}
+        run: |
+          gh pr comment $PR_NUMBER --body-file review_comment.md
