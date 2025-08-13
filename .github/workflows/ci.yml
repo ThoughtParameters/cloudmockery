@@ -1,4 +1,4 @@
-name: CI and AI Code Review
+name: CI
 
 on:
   push:
@@ -29,73 +29,3 @@ jobs:
 
       - name: Run tests
         run: pytest
-
-  ai_code_review:
-    needs: lint_and_test
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # Fetch all history for a proper diff
-
-      - name: Get PR diff
-        id: diff
-        run: |
-          git fetch origin ${{ github.event.pull_request.base.sha }}
-          DIFF_CONTENT=$(git diff ${{ github.event.pull_request.base.sha }} ${{ github.sha }})
-          echo "--- Diff content (first 15 lines) ---"
-          echo "$DIFF_CONTENT" | head -n 15
-          echo "-------------------------------------"
-          DELIMITER=$(openssl rand -hex 8)
-          echo "diff_content<<$DELIMITER" >> $GITHUB_OUTPUT
-          echo "$DIFF_CONTENT" >> $GITHUB_OUTPUT
-          echo "$DELIMITER" >> $GITHUB_OUTPUT
-
-      - name: Get AI Code Review
-        id: review
-        env:
-          PROMPT_TEXT: "As an expert code reviewer, analyze this pull request diff. Provide concise, actionable feedback on potential bugs, style issues, and performance improvements. Suggest a priority (Low, Medium, High) for addressing your comments."
-          DIFF_CONTENT: "${{ steps.diff.outputs.diff_content }}"
-          GEMINI_API_KEY: "${{ secrets.GEMINI_API_KEY }}"
-        run: |
-          # Use jq to safely construct the JSON payload by reading from environment variables
-          JSON_PAYLOAD=$(jq -n \
-            '{contents: [{parts: [{text: (env.PROMPT_TEXT + "\n\nDiff:\n\n" + env.DIFF_CONTENT)}]}]}')
-
-          echo "--- JSON Payload Sent (diff redacted) ---"
-          echo "$JSON_PAYLOAD" | jq '.contents[0].parts[0].text = "Diff content redacted for logging."'
-          echo "-----------------------------------------"
-
-          # Call the Gemini API and save the response
-          API_RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}\n" -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${GEMINI_API_KEY}" \
-            -H "Content-Type: application/json" \
-            -d "$JSON_PAYLOAD")
-
-          echo "--- Full API Response ---"
-          echo "$API_RESPONSE"
-          echo "-------------------------"
-
-          # Check for a non-200 HTTP status code
-          HTTP_STATUS=$(echo "$API_RESPONSE" | grep "HTTP_STATUS:" | awk -F: '{print $2}')
-          if [ "$HTTP_STATUS" -ne 200 ]; then
-            echo "Error: Gemini API returned status $HTTP_STATUS"
-            # Also print the JSON body for error details
-            echo "$API_RESPONSE" | sed '$d'
-            exit 1
-          fi
-
-          # Extract the text content and save it to a file for the next step
-          JSON_BODY=$(echo "$API_RESPONSE" | sed '$d')
-          echo "$JSON_BODY" | jq -r '.candidates[0].content.parts[0].text' > review_comment.md
-
-      - name: Post review comment on PR
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.number }}
-        run: |
-          gh pr comment $PR_NUMBER --body-file review_comment.md
