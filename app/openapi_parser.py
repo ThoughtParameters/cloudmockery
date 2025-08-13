@@ -9,7 +9,7 @@ import os
 import json
 from typing import List, Dict, Any, Set
 
-from app.config import settings
+from app.config import get_settings
 
 class OpenAPIParser:
     """
@@ -27,6 +27,7 @@ class OpenAPIParser:
         Args:
             service_name: The name of the service (e.g., 'compute', 'storage').
         """
+        settings = get_settings()
         # Handle service name mapping to directory name
         if service_name == 'networking':
             service_name = 'network'

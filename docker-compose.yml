@@ -2,21 +2,28 @@ version: '3.8'
 
 services:
   api:
-    # Build the Docker image from the local Dockerfile.
     build: .
-
-    # Map port 8000 on the host to port 8000 in the container
-    # to allow local access to the API.
     ports:
       - "8000:8000"
-
-    # Mount the local 'app' directory into the container at '/app'.
-    # This enables hot-reloading on code changes.
     volumes:
       - ./app:/app/
+    env_file:
+      - .env
+    depends_on:
+      - db
+    command: uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000 --reload
 
-    # Override the default command to enable auto-reloading.
-    # Uvicorn will watch for changes in the '/app' directory and
-    # restart the server automatically.
-    # This assumes an 'app' instance exists in an 'app/main.py' file.
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+  db:
+    image: postgres:15-alpine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    ports:
+      - "5432:5432"
+    env_file:
+      - .env
+
+volumes:
+  postgres_data:
+    # This named volume ensures that the database data is persisted
+    # across container restarts.
+    name: azure-emulator-postgres-data

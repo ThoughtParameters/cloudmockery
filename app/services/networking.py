@@ -59,4 +59,4 @@ def _setup_routes():
         added_paths.add(path)
 
 # When this module is loaded, parse the specs and create the routes.
-_setup_routes()
+# _setup_routes()  # Temporarily disabled pending DB refactor for this service.
