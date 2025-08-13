@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  lint_and_test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Clone Azure REST API Specs
+        run: git clone --depth 1 https://github.com/Azure/azure-rest-api-specs.git
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Lint code (placeholder)
+        run: echo "Linter placeholder - e.g., run flake8 or ruff here"
+
+      - name: Run tests
+        run: pytest

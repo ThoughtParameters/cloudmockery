@@ -5,3 +5,7 @@ pydantic-settings
 requests
 pyyaml
 pytest
+httpx
+sqlmodel
+psycopg2-binary
+pytest-dotenv
