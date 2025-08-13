@@ -1,0 +1,48 @@
+# This workflow builds and publishes a Docker image to the GitHub Container Registry (GHCR)
+# It is triggered whenever a new tag matching the pattern 'v*' is pushed.
+name: Publish Docker Image to GHCR
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    # The 'packages: write' permission is required to push images to GHCR.
+    # The 'contents: read' permission is required to check out the repository.
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to the GitHub Container Registry
+        # This action securely logs in to GHCR using a temporary GITHUB_TOKEN.
+        # No manual configuration of secrets is needed for this step.
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for Docker
+        # This action automatically creates useful labels and tags for the Docker image.
+        # For a Git tag like 'v1.2.3', it will create Docker tags '1.2.3' and 'latest'.
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+
+      - name: Build and push Docker image
+        # This action builds the image from the local Dockerfile and pushes it to GHCR
+        # with the tags and labels generated in the previous step.
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
