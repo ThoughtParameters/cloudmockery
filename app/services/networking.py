@@ -1,62 +1,57 @@
 """
-Dynamically generated API routes for the Azure Networking service.
+API routes for the Azure Networking service, using a database for persistence.
 """
-from typing import Any, Dict
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, HTTPException
+from sqlmodel import Session, select
+from typing import List
 
-from app.openapi_parser import OpenAPIParser
-
-# In-memory dictionary to simulate resource state.
-in_memory_db: Dict[str, Any] = {}
+from app.db import get_session
+from app.models import VirtualNetwork
+from app.security import verify_token
 
 router = APIRouter(
     prefix="/networking",
     tags=["networking"],
+    dependencies=[Depends(verify_token)],
 )
 
-def _create_route_handler(parser: OpenAPIParser, endpoint_info: Dict[str, Any]):
+@router.post("/virtualnetworks/", response_model=VirtualNetwork)
+def create_virtual_network(
+    *,
+    session: Session = Depends(get_session),
+    vnet: VirtualNetwork
+):
     """
-    Factory function to create a FastAPI route handler for a given endpoint.
+    Create a new virtual network resource in the database.
     """
-    async def route_handler(request: Request) -> Any:
-        """
-        Dynamically created route handler for a GET request.
-        """
-        resource_key = request.url.path
+    # In a real implementation, we would handle subnets and other properties.
+    # For now, we just create the main VNet record.
+    session.add(vnet)
+    session.commit()
+    session.refresh(vnet)
+    return vnet
 
-        if resource_key not in in_memory_db:
-            response_schema = endpoint_info['response_schema']
-            spec = endpoint_info['spec']
-            mock_data = parser.generate_mock_data(schema=response_schema, spec=spec)
-            in_memory_db[resource_key] = mock_data
-
-        return in_memory_db[resource_key]
-
-    return route_handler
-
-def _setup_routes():
+@router.get("/virtualnetworks/", response_model=List[VirtualNetwork])
+def list_virtual_networks(
+    *,
+    session: Session = Depends(get_session)
+):
     """
-    Parses the OpenAPI specs and dynamically creates routes for the networking service.
+    List all virtual network resources in the database.
     """
-    parser = OpenAPIParser(service_name="networking")
-    endpoints = parser.parse()
-    added_paths = set()
+    vnets = session.exec(select(VirtualNetwork)).all()
+    return vnets
 
-    for endpoint in endpoints:
-        path = endpoint['path']
-        if path in added_paths:
-            continue
-
-        handler = _create_route_handler(parser, endpoint)
-
-        router.add_api_route(
-            path,
-            handler,
-            methods=["GET"],
-            summary=endpoint.get('operationId', 'No summary available'),
-            operation_id=endpoint.get('operationId')
-        )
-        added_paths.add(path)
-
-# When this module is loaded, parse the specs and create the routes.
-# _setup_routes()  # Temporarily disabled pending DB refactor for this service.
+@router.get("/virtualnetworks/{vnet_id}", response_model=VirtualNetwork)
+def get_virtual_network_by_id(
+    *,
+    session: Session = Depends(get_session),
+    vnet_id: int
+):
+    """
+    Retrieve a virtual network by its database ID.
+    """
+    vnet = session.get(VirtualNetwork, vnet_id)
+    if not vnet:
+        raise HTTPException(status_code=404, detail="Virtual network not found")
+    return vnet

@@ -1,53 +1,76 @@
 """
-Basic tests for the dynamically generated networking service endpoints.
-
-NOTE: These tests are temporarily disabled pending the refactor of the
-networking service to use the database for persistence.
+Tests for the database-driven networking service endpoints.
 """
-# import re
-# from fastapi.testclient import TestClient
-# from app.main import app
+from fastapi.testclient import TestClient
+from typing import Dict
 
-# client = TestClient(app)
+# All fixtures are provided by conftest.py
 
-# def _find_first_get_endpoint(prefix: str) -> str:
-#     """Finds the first registered GET endpoint with the given prefix."""
-#     for route in app.routes:
-#         if route.path.startswith(prefix) and "GET" in route.methods:
-#             return route.path
-#     return None
+def test_create_and_get_vnet(client: TestClient, auth_headers: Dict[str, str]):
+    """
+    Tests creating a virtual network and then retrieving it.
+    """
+    vnet_payload = {
+        "name": "test-vnet-01",
+        "resource_group": "test-rg-1",
+        "location": "eastus",
+        "address_space": "10.0.0.0/16",
+    }
 
-# def _substitute_path_params(path: str) -> str:
-#     """Replaces path parameter placeholders with dummy string values."""
-#     return re.sub(r"\{(\w+)\}", r"test_\1", path)
+    # Create the VNet
+    response_create = client.post(
+        "/networking/virtualnetworks/", json=vnet_payload, headers=auth_headers
+    )
+    assert response_create.status_code == 200
+    created_data = response_create.json()
 
-# def test_random_networking_get_endpoint():
-#     """
-#     Tests a dynamically generated GET endpoint for the networking service.
+    # Verify the created data
+    assert "id" in created_data
+    assert created_data["name"] == vnet_payload["name"]
+    vnet_id = created_data["id"]
 
-#     It discovers a networking endpoint, sends a request to it, and asserts
-#     that the response is successful and contains data.
-#     """
-#     # Find a GET endpoint for the networking service to test
-#     endpoint_path = _find_first_get_endpoint("/networking")
-#     assert endpoint_path is not None, "No GET endpoints found for /networking to test."
+    # Retrieve the VNet by its ID
+    response_get = client.get(f"/networking/virtualnetworks/{vnet_id}", headers=auth_headers)
+    assert response_get.status_code == 200
+    assert response_get.json() == created_data
 
-#     # Prepare the path by substituting any path parameters
-#     test_path = _substitute_path_params(endpoint_path)
+def test_list_vnets(client: TestClient, auth_headers: Dict[str, str]):
+    """
+    Tests listing virtual networks after creating one.
+    """
+    # Create a VNet to ensure the list is not empty
+    vnet_payload = {
+        "name": "test-vnet-02",
+        "resource_group": "test-rg-2",
+        "location": "westus",
+        "address_space": "192.168.0.0/16",
+    }
+    client.post("/networking/virtualnetworks/", json=vnet_payload, headers=auth_headers)
 
-#     # Make the request
-#     response = client.get(test_path)
+    response = client.get("/networking/virtualnetworks/", headers=auth_headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+    assert len(data) > 0
+    assert any(item["name"] == "test-vnet-02" for item in data)
 
-#     # Assert the response
-#     assert response.status_code == 200
-#     response_data = response.json()
-#     assert response_data is not None
-#     assert isinstance(response_data, (dict, list))
-#     if isinstance(response_data, list):
-#         assert len(response_data) > 0
-#     else:
-#         assert len(response_data.keys()) > 0
+def test_get_nonexistent_vnet(client: TestClient, auth_headers: Dict[str, str]):
+    """
+    Tests that requesting a VNet with an ID that does not exist
+    returns a 404 Not Found error.
+    """
+    response = client.get("/networking/virtualnetworks/99999", headers=auth_headers)
+    assert response.status_code == 404
 
-def test_placeholder():
-    """Placeholder test to ensure the test suite runs."""
-    assert True
+def test_create_vnet_unauthorized(client: TestClient):
+    """
+    Tests that creating a VNet without an auth token fails with a 401 error.
+    """
+    vnet_payload = {
+        "name": "unauth-vnet",
+        "resource_group": "unauth-rg",
+        "location": "eastus",
+        "address_space": "172.16.0.0/16",
+    }
+    response = client.post("/networking/virtualnetworks/", json=vnet_payload)  # No headers
+    assert response.status_code == 401

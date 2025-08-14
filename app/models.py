@@ -4,8 +4,8 @@ SQLModel definitions for database tables.
 This module contains the class definitions for all database models, which
 SQLModel uses to interact with the database tables.
 """
-from typing import Optional
-from sqlmodel import Field, SQLModel
+from typing import Optional, List
+from sqlmodel import Field, SQLModel, Relationship
 
 class VirtualMachine(SQLModel, table=True):
     """
@@ -28,3 +28,27 @@ class VirtualMachine(SQLModel, table=True):
 
     # The provisioning state of the resource (e.g., "Succeeded", "Failed").
     provisioning_state: str = "Succeeded"
+
+
+class Subnet(SQLModel, table=True):
+    """Represents a subnet within a virtual network."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True)
+    address_prefix: str
+
+    # Foreign key to the VirtualNetwork table
+    virtual_network_id: Optional[int] = Field(default=None, foreign_key="virtualnetwork.id")
+    # The back-populating relationship to the VirtualNetwork model
+    virtual_network: "VirtualNetwork" = Relationship(back_populates="subnets")
+
+
+class VirtualNetwork(SQLModel, table=True):
+    """Represents a virtual network resource in the database."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True)
+    resource_group: str = Field(index=True)
+    location: str
+    address_space: str
+
+    # The one-to-many relationship to subnets
+    subnets: List["Subnet"] = Relationship(back_populates="virtual_network")
