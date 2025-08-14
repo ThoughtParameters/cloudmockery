@@ -11,10 +11,13 @@ from typing import List
 
 from app.db import get_session
 from app.models import VirtualMachine
+from app.security import verify_token
+
 
 router = APIRouter(
     prefix="/compute",
     tags=["compute"],
+    dependencies=[Depends(verify_token)],
 )
 
 @router.post("/virtualmachines/", response_model=VirtualMachine)
