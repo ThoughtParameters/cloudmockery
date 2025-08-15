@@ -1,11 +1,8 @@
 """
-API routes for the Azure Compute service, using a database for persistence.
-
-This module provides CRUD operations for compute resources, starting with
-Virtual Machines. It has been refactored to use SQLModel and a PostgreSQL
-database, replacing the previous in-memory, dynamically generated routes.
+API routes for the Azure Compute service, using a database for persistence
+and realistic, structured API paths.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session, select
 from typing import List
 
@@ -13,48 +10,107 @@ from app.db import get_session
 from app.models import VirtualMachine
 from app.security import verify_token
 
+# Pydantic models for request bodies, separating them from the DB model
+from pydantic import BaseModel
+class VirtualMachineCreate(BaseModel):
+    location: str
+    properties: dict # A simple dict to capture vmSize, etc.
 
 router = APIRouter(
-    prefix="/compute",
+    prefix="/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Compute",
     tags=["compute"],
     dependencies=[Depends(verify_token)],
 )
 
-@router.post("/virtualmachines/", response_model=VirtualMachine)
-def create_virtual_machine(
+@router.put("/virtualMachines/{vm_name}", response_model=VirtualMachine)
+def create_or_update_vm(
     *,
     session: Session = Depends(get_session),
-    vm: VirtualMachine
+    resourceGroupName: str,
+    vm_name: str,
+    vm_body: VirtualMachineCreate,
 ):
     """
-    Create a new virtual machine resource in the database.
+    Create or update a virtual machine (upsert).
+    This mimics the standard Azure PUT-as-upsert pattern.
     """
-    session.add(vm)
+    statement = select(VirtualMachine).where(
+        VirtualMachine.name == vm_name,
+        VirtualMachine.resource_group == resourceGroupName,
+    )
+    db_vm = session.exec(statement).first()
+
+    if db_vm:
+        # Update existing VM
+        db_vm.location = vm_body.location
+        db_vm.vm_size = vm_body.properties.get("hardwareProfile", {}).get("vmSize", "Unknown")
+        db_vm.provisioning_state = "Succeeded"
+    else:
+        # Create new VM
+        db_vm = VirtualMachine(
+            name=vm_name,
+            resource_group=resourceGroupName,
+            location=vm_body.location,
+            vm_size=vm_body.properties.get("hardwareProfile", {}).get("vmSize", "Unknown"),
+            provisioning_state="Succeeded",
+        )
+
+    session.add(db_vm)
     session.commit()
-    session.refresh(vm)
+    session.refresh(db_vm)
+    return db_vm
+
+@router.get("/virtualMachines/{vm_name}", response_model=VirtualMachine)
+def get_vm(
+    *,
+    session: Session = Depends(get_session),
+    resourceGroupName: str,
+    vm_name: str,
+):
+    """
+    Get a specific virtual machine by name and resource group.
+    """
+    statement = select(VirtualMachine).where(
+        VirtualMachine.name == vm_name,
+        VirtualMachine.resource_group == resourceGroupName,
+    )
+    vm = session.exec(statement).first()
+    if not vm:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Virtual machine not found")
     return vm
 
-@router.get("/virtualmachines/", response_model=List[VirtualMachine])
-def list_virtual_machines(
+@router.get("/virtualMachines", response_model=List[VirtualMachine])
+def list_vms_in_rg(
     *,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    resourceGroupName: str,
 ):
     """
-    List all virtual machine resources in the database.
+    List all virtual machines within a specific resource group.
     """
-    vms = session.exec(select(VirtualMachine)).all()
+    statement = select(VirtualMachine).where(VirtualMachine.resource_group == resourceGroupName)
+    vms = session.exec(statement).all()
     return vms
 
-@router.get("/virtualmachines/{vm_id}", response_model=VirtualMachine)
-def get_virtual_machine_by_id(
+@router.delete("/virtualMachines/{vm_name}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_vm(
     *,
     session: Session = Depends(get_session),
-    vm_id: int
+    resourceGroupName: str,
+    vm_name: str,
 ):
     """
-    Retrieve a virtual machine by its database ID.
+    Delete a specific virtual machine.
     """
-    vm = session.get(VirtualMachine, vm_id)
-    if not vm:
-        raise HTTPException(status_code=404, detail="Virtual machine not found")
-    return vm
+    statement = select(VirtualMachine).where(
+        VirtualMachine.name == vm_name,
+        VirtualMachine.resource_group == resourceGroupName,
+    )
+    vm_to_delete = session.exec(statement).first()
+
+    if not vm_to_delete:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Virtual machine not found")
+
+    session.delete(vm_to_delete)
+    session.commit()
+    return None

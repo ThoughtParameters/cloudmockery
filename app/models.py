@@ -5,9 +5,11 @@ This module contains the class definitions for all database models, which
 SQLModel uses to interact with the database tables.
 """
 from typing import Optional, List
+from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, SQLModel, Relationship
 
 class VirtualMachine(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("name", "resource_group", name="unique_vm_in_rg"),)
     """
     Represents a virtual machine resource in the database.
     """
