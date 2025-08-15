@@ -1,62 +1,55 @@
 """
-Dynamically generated API routes for the Azure Storage service.
+API routes for the Azure Storage service, using a database for persistence.
 """
-from typing import Any, Dict
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, HTTPException
+from sqlmodel import Session, select
+from typing import List
 
-from app.openapi_parser import OpenAPIParser
-
-# In-memory dictionary to simulate resource state.
-in_memory_db: Dict[str, Any] = {}
+from app.db import get_session
+from app.models import StorageAccount
+from app.security import verify_token
 
 router = APIRouter(
     prefix="/storage",
     tags=["storage"],
+    dependencies=[Depends(verify_token)],
 )
 
-def _create_route_handler(parser: OpenAPIParser, endpoint_info: Dict[str, Any]):
+@router.post("/storageaccounts/", response_model=StorageAccount)
+def create_storage_account(
+    *,
+    session: Session = Depends(get_session),
+    account: StorageAccount
+):
     """
-    Factory function to create a FastAPI route handler for a given endpoint.
+    Create a new storage account resource in the database.
     """
-    async def route_handler(request: Request) -> Any:
-        """
-        Dynamically created route handler for a GET request.
-        """
-        resource_key = request.url.path
+    session.add(account)
+    session.commit()
+    session.refresh(account)
+    return account
 
-        if resource_key not in in_memory_db:
-            response_schema = endpoint_info['response_schema']
-            spec = endpoint_info['spec']
-            mock_data = parser.generate_mock_data(schema=response_schema, spec=spec)
-            in_memory_db[resource_key] = mock_data
-
-        return in_memory_db[resource_key]
-
-    return route_handler
-
-def _setup_routes():
+@router.get("/storageaccounts/", response_model=List[StorageAccount])
+def list_storage_accounts(
+    *,
+    session: Session = Depends(get_session)
+):
     """
-    Parses the OpenAPI specs and dynamically creates routes for the storage service.
+    List all storage account resources in the database.
     """
-    parser = OpenAPIParser(service_name="storage")
-    endpoints = parser.parse()
-    added_paths = set()
+    accounts = session.exec(select(StorageAccount)).all()
+    return accounts
 
-    for endpoint in endpoints:
-        path = endpoint['path']
-        if path in added_paths:
-            continue
-
-        handler = _create_route_handler(parser, endpoint)
-
-        router.add_api_route(
-            path,
-            handler,
-            methods=["GET"],
-            summary=endpoint.get('operationId', 'No summary available'),
-            operation_id=endpoint.get('operationId')
-        )
-        added_paths.add(path)
-
-# When this module is loaded, parse the specs and create the routes.
-# _setup_routes()  # Temporarily disabled pending DB refactor for this service.
+@router.get("/storageaccounts/{account_id}", response_model=StorageAccount)
+def get_storage_account_by_id(
+    *,
+    session: Session = Depends(get_session),
+    account_id: int
+):
+    """
+    Retrieve a storage account by its database ID.
+    """
+    account = session.get(StorageAccount, account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Storage account not found")
+    return account

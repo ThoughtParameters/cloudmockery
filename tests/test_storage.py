@@ -1,53 +1,79 @@
 """
-Basic tests for the dynamically generated storage service endpoints.
-
-NOTE: These tests are temporarily disabled pending the refactor of the
-storage service to use the database for persistence.
+Tests for the database-driven storage service endpoints.
 """
-# import re
-# from fastapi.testclient import TestClient
-# from app.main import app
+from fastapi.testclient import TestClient
+from typing import Dict
 
-# client = TestClient(app)
+# All fixtures are provided by conftest.py
 
-# def _find_first_get_endpoint(prefix: str) -> str:
-#     """Finds the first registered GET endpoint with the given prefix."""
-#     for route in app.routes:
-#         if route.path.startswith(prefix) and "GET" in route.methods:
-#             return route.path
-#     return None
+def test_create_and_get_storage_account(client: TestClient, auth_headers: Dict[str, str]):
+    """
+    Tests creating a storage account and then retrieving it.
+    """
+    account_payload = {
+        "name": "teststorageaccount01",
+        "resource_group": "test-rg-1",
+        "location": "eastus",
+        "sku": "Standard_LRS",
+        "kind": "StorageV2",
+    }
 
-# def _substitute_path_params(path: str) -> str:
-#     """Replaces path parameter placeholders with dummy string values."""
-#     return re.sub(r"\{(\w+)\}", r"test_\1", path)
+    # Create the Storage Account
+    response_create = client.post(
+        "/storage/storageaccounts/", json=account_payload, headers=auth_headers
+    )
+    assert response_create.status_code == 200
+    created_data = response_create.json()
 
-# def test_random_storage_get_endpoint():
-#     """
-#     Tests a dynamically generated GET endpoint for the storage service.
+    # Verify the created data
+    assert "id" in created_data
+    assert created_data["name"] == account_payload["name"]
+    account_id = created_data["id"]
 
-#     It discovers a storage endpoint, sends a request to it, and asserts
-#     that the response is successful and contains data.
-#     """
-#     # Find a GET endpoint for the storage service to test
-#     endpoint_path = _find_first_get_endpoint("/storage")
-#     assert endpoint_path is not None, "No GET endpoints found for /storage to test."
+    # Retrieve the Storage Account by its ID
+    response_get = client.get(f"/storage/storageaccounts/{account_id}", headers=auth_headers)
+    assert response_get.status_code == 200
+    assert response_get.json() == created_data
 
-#     # Prepare the path by substituting any path parameters
-#     test_path = _substitute_path_params(endpoint_path)
+def test_list_storage_accounts(client: TestClient, auth_headers: Dict[str, str]):
+    """
+    Tests listing storage accounts after creating one.
+    """
+    # Create a storage account to ensure the list is not empty
+    account_payload = {
+        "name": "teststorageaccount02",
+        "resource_group": "test-rg-2",
+        "location": "westus",
+        "sku": "Premium_LRS",
+        "kind": "BlockBlobStorage",
+    }
+    client.post("/storage/storageaccounts/", json=account_payload, headers=auth_headers)
 
-#     # Make the request
-#     response = client.get(test_path)
+    response = client.get("/storage/storageaccounts/", headers=auth_headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+    assert len(data) > 0
+    assert any(item["name"] == "teststorageaccount02" for item in data)
 
-#     # Assert the response
-#     assert response.status_code == 200
-#     response_data = response.json()
-#     assert response_data is not None
-#     assert isinstance(response_data, (dict, list))
-#     if isinstance(response_data, list):
-#         assert len(response_data) > 0
-#     else:
-#         assert len(response_data.keys()) > 0
+def test_get_nonexistent_storage_account(client: TestClient, auth_headers: Dict[str, str]):
+    """
+    Tests that requesting a storage account with an ID that does not exist
+    returns a 404 Not Found error.
+    """
+    response = client.get("/storage/storageaccounts/99999", headers=auth_headers)
+    assert response.status_code == 404
 
-def test_placeholder():
-    """Placeholder test to ensure the test suite runs."""
-    assert True
+def test_create_storage_account_unauthorized(client: TestClient):
+    """
+    Tests that creating a storage account without an auth token fails with a 401 error.
+    """
+    account_payload = {
+        "name": "unauthstorage",
+        "resource_group": "unauth-rg",
+        "location": "eastus",
+        "sku": "Standard_LRS",
+        "kind": "StorageV2",
+    }
+    response = client.post("/storage/storageaccounts/", json=account_payload)  # No headers
+    assert response.status_code == 401

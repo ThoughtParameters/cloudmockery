@@ -52,3 +52,13 @@ class VirtualNetwork(SQLModel, table=True):
 
     # The one-to-many relationship to subnets
     subnets: List["Subnet"] = Relationship(back_populates="virtual_network")
+
+
+class StorageAccount(SQLModel, table=True):
+    """Represents a storage account resource in the database."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True, unique=True)
+    resource_group: str = Field(index=True)
+    location: str
+    sku: str  # e.g., "Standard_LRS", "Premium_LRS"
+    kind: str  # e.g., "StorageV2", "BlobStorage"
