@@ -58,9 +58,10 @@ class VirtualNetwork(SQLModel, table=True):
 
 
 class StorageAccount(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("name", "resource_group", name="unique_sa_in_rg"),)
     """Represents a storage account resource in the database."""
     id: Optional[int] = Field(default=None, primary_key=True)
-    name: str = Field(index=True, unique=True)
+    name: str = Field(index=True)
     resource_group: str = Field(index=True)
     location: str
     sku: str  # e.g., "Standard_LRS", "Premium_LRS"
