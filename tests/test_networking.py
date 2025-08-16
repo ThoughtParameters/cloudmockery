@@ -1,53 +1,76 @@
 """
-Basic tests for the dynamically generated networking service endpoints.
-
-NOTE: These tests are temporarily disabled pending the refactor of the
-networking service to use the database for persistence.
+Tests for the refactored, path-compliant networking service endpoints.
 """
-# import re
-# from fastapi.testclient import TestClient
-# from app.main import app
+from fastapi.testclient import TestClient
+from typing import Dict
 
-# client = TestClient(app)
+# All fixtures are provided by conftest.py
 
-# def _find_first_get_endpoint(prefix: str) -> str:
-#     """Finds the first registered GET endpoint with the given prefix."""
-#     for route in app.routes:
-#         if route.path.startswith(prefix) and "GET" in route.methods:
-#             return route.path
-#     return None
+def test_vnet_lifecycle(client: TestClient, auth_headers: Dict[str, str]):
+    """
+    Tests the full lifecycle of a virtual network resource:
+    PUT (create), GET (verify), GET (list), DELETE, GET (verify deletion).
+    """
+    subscription_id = "test-sub-123"
+    resource_group_name = "test-rg-net-1"
+    vnet_name = "test-vnet-01"
 
-# def _substitute_path_params(path: str) -> str:
-#     """Replaces path parameter placeholders with dummy string values."""
-#     return re.sub(r"\{(\w+)\}", r"test_\1", path)
+    # Define the API path for the specific VNet
+    api_path = f"/subscriptions/{subscription_id}/resourceGroups/{resource_group_name}/providers/Microsoft.Network/virtualNetworks/{vnet_name}"
 
-# def test_random_networking_get_endpoint():
-#     """
-#     Tests a dynamically generated GET endpoint for the networking service.
+    # 1. Create the VNet with PUT
+    vnet_payload = {
+        "location": "westus",
+        "properties": {
+            "addressSpace": {
+                "addressPrefixes": ["10.1.0.0/16"]
+            }
+        }
+    }
+    response_put = client.put(api_path, json=vnet_payload, headers=auth_headers)
+    assert response_put.status_code == 200
+    created_data = response_put.json()
+    assert created_data["name"] == vnet_name
+    assert created_data["resource_group"] == resource_group_name
+    assert created_data["location"] == vnet_payload["location"]
+    assert "id" in created_data
 
-#     It discovers a networking endpoint, sends a request to it, and asserts
-#     that the response is successful and contains data.
-#     """
-#     # Find a GET endpoint for the networking service to test
-#     endpoint_path = _find_first_get_endpoint("/networking")
-#     assert endpoint_path is not None, "No GET endpoints found for /networking to test."
+    # 2. Retrieve the created VNet with GET
+    response_get = client.get(api_path, headers=auth_headers)
+    assert response_get.status_code == 200
+    assert response_get.json() == created_data
 
-#     # Prepare the path by substituting any path parameters
-#     test_path = _substitute_path_params(endpoint_path)
+    # 3. List VNets in the resource group and find the new one
+    list_path = f"/subscriptions/{subscription_id}/resourceGroups/{resource_group_name}/providers/Microsoft.Network/virtualNetworks"
+    response_list = client.get(list_path, headers=auth_headers)
+    assert response_list.status_code == 200
+    vnet_list = response_list.json()
+    assert isinstance(vnet_list, list)
+    assert len(vnet_list) > 0
+    assert any(vnet["name"] == vnet_name for vnet in vnet_list)
 
-#     # Make the request
-#     response = client.get(test_path)
+    # 4. Delete the VNet
+    response_delete = client.delete(api_path, headers=auth_headers)
+    assert response_delete.status_code == 204
 
-#     # Assert the response
-#     assert response.status_code == 200
-#     response_data = response.json()
-#     assert response_data is not None
-#     assert isinstance(response_data, (dict, list))
-#     if isinstance(response_data, list):
-#         assert len(response_data) > 0
-#     else:
-#         assert len(response_data.keys()) > 0
+    # 5. Verify the VNet is gone (GET should now be 404)
+    response_get_after_delete = client.get(api_path, headers=auth_headers)
+    assert response_get_after_delete.status_code == 404
 
-def test_placeholder():
-    """Placeholder test to ensure the test suite runs."""
-    assert True
+def test_vnet_auth(client: TestClient):
+    """
+    Tests that unauthorized requests to the VNet endpoints are rejected.
+    """
+    api_path = "/subscriptions/test-sub-auth/resourceGroups/test-rg-auth/providers/Microsoft.Network/virtualNetworks/test-vnet-auth"
+    vnet_payload = {
+        "location": "westus",
+        "properties": {"addressSpace": {"addressPrefixes": ["10.2.0.0/16"]}}
+    }
+
+    # Test PUT without auth
+    response_no_auth = client.put(api_path, json=vnet_payload)
+    assert response_no_auth.status_code == 401
+
+    # Test GET with bad token
+    response_bad_token = client.get(api_path, headers={"Authorization": "Bearer bad-token"})
+    assert response_bad_token.status_code == 401

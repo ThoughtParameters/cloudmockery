@@ -1,62 +1,115 @@
 """
-Dynamically generated API routes for the Azure Networking service.
+API routes for the Azure Networking service, using a database for persistence
+and realistic, structured API paths.
 """
-from typing import Any, Dict
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlmodel import Session, select
+from typing import List
 
-from app.openapi_parser import OpenAPIParser
+from app.db import get_session
+from app.models import VirtualNetwork
+from app.security import verify_token
 
-# In-memory dictionary to simulate resource state.
-in_memory_db: Dict[str, Any] = {}
+# Pydantic models for request bodies
+from pydantic import BaseModel
+class VirtualNetworkCreate(BaseModel):
+    location: str
+    properties: dict # e.g. {"addressSpace": {"addressPrefixes": ["10.0.0.0/16"]}}
 
 router = APIRouter(
-    prefix="/networking",
+    prefix="/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Network",
     tags=["networking"],
+    dependencies=[Depends(verify_token)],
 )
 
-def _create_route_handler(parser: OpenAPIParser, endpoint_info: Dict[str, Any]):
+@router.put("/virtualNetworks/{vnet_name}", response_model=VirtualNetwork)
+def create_or_update_vnet(
+    *,
+    session: Session = Depends(get_session),
+    resourceGroupName: str,
+    vnet_name: str,
+    vnet_body: VirtualNetworkCreate,
+):
     """
-    Factory function to create a FastAPI route handler for a given endpoint.
+    Create or update a virtual network (upsert).
     """
-    async def route_handler(request: Request) -> Any:
-        """
-        Dynamically created route handler for a GET request.
-        """
-        resource_key = request.url.path
+    statement = select(VirtualNetwork).where(
+        VirtualNetwork.name == vnet_name,
+        VirtualNetwork.resource_group == resourceGroupName,
+    )
+    db_vnet = session.exec(statement).first()
 
-        if resource_key not in in_memory_db:
-            response_schema = endpoint_info['response_schema']
-            spec = endpoint_info['spec']
-            mock_data = parser.generate_mock_data(schema=response_schema, spec=spec)
-            in_memory_db[resource_key] = mock_data
+    address_space = vnet_body.properties.get("addressSpace", {}).get("addressPrefixes", [""])[0]
 
-        return in_memory_db[resource_key]
-
-    return route_handler
-
-def _setup_routes():
-    """
-    Parses the OpenAPI specs and dynamically creates routes for the networking service.
-    """
-    parser = OpenAPIParser(service_name="networking")
-    endpoints = parser.parse()
-    added_paths = set()
-
-    for endpoint in endpoints:
-        path = endpoint['path']
-        if path in added_paths:
-            continue
-
-        handler = _create_route_handler(parser, endpoint)
-
-        router.add_api_route(
-            path,
-            handler,
-            methods=["GET"],
-            summary=endpoint.get('operationId', 'No summary available'),
-            operation_id=endpoint.get('operationId')
+    if db_vnet:
+        # Update existing VNet
+        db_vnet.location = vnet_body.location
+        db_vnet.address_space = address_space
+    else:
+        # Create new VNet
+        db_vnet = VirtualNetwork(
+            name=vnet_name,
+            resource_group=resourceGroupName,
+            location=vnet_body.location,
+            address_space=address_space,
         )
-        added_paths.add(path)
 
-# When this module is loaded, parse the specs and create the routes.
-# _setup_routes()  # Temporarily disabled pending DB refactor for this service.
+    session.add(db_vnet)
+    session.commit()
+    session.refresh(db_vnet)
+    return db_vnet
+
+@router.get("/virtualNetworks/{vnet_name}", response_model=VirtualNetwork)
+def get_vnet(
+    *,
+    session: Session = Depends(get_session),
+    resourceGroupName: str,
+    vnet_name: str,
+):
+    """
+    Get a specific virtual network by name and resource group.
+    """
+    statement = select(VirtualNetwork).where(
+        VirtualNetwork.name == vnet_name,
+        VirtualNetwork.resource_group == resourceGroupName,
+    )
+    vnet = session.exec(statement).first()
+    if not vnet:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Virtual network not found")
+    return vnet
+
+@router.get("/virtualNetworks", response_model=List[VirtualNetwork])
+def list_vnets_in_rg(
+    *,
+    session: Session = Depends(get_session),
+    resourceGroupName: str,
+):
+    """
+    List all virtual networks within a specific resource group.
+    """
+    statement = select(VirtualNetwork).where(VirtualNetwork.resource_group == resourceGroupName)
+    vnets = session.exec(statement).all()
+    return vnets
+
+@router.delete("/virtualNetworks/{vnet_name}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_vnet(
+    *,
+    session: Session = Depends(get_session),
+    resourceGroupName: str,
+    vnet_name: str,
+):
+    """
+    Delete a specific virtual network.
+    """
+    statement = select(VirtualNetwork).where(
+        VirtualNetwork.name == vnet_name,
+        VirtualNetwork.resource_group == resourceGroupName,
+    )
+    vnet_to_delete = session.exec(statement).first()
+
+    if not vnet_to_delete:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Virtual network not found")
+
+    session.delete(vnet_to_delete)
+    session.commit()
+    return None

@@ -1,62 +1,119 @@
 """
-Dynamically generated API routes for the Azure Storage service.
+API routes for the Azure Storage service, using a database for persistence
+and realistic, structured API paths.
 """
-from typing import Any, Dict
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlmodel import Session, select
+from typing import List
 
-from app.openapi_parser import OpenAPIParser
+from app.db import get_session
+from app.models import StorageAccount
+from app.security import verify_token
 
-# In-memory dictionary to simulate resource state.
-in_memory_db: Dict[str, Any] = {}
+# Pydantic models for request bodies
+from pydantic import BaseModel
+class Sku(BaseModel):
+    name: str
+
+class StorageAccountCreate(BaseModel):
+    location: str
+    sku: Sku
+    kind: str
 
 router = APIRouter(
-    prefix="/storage",
+    prefix="/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Storage",
     tags=["storage"],
+    dependencies=[Depends(verify_token)],
 )
 
-def _create_route_handler(parser: OpenAPIParser, endpoint_info: Dict[str, Any]):
+@router.put("/storageAccounts/{account_name}", response_model=StorageAccount)
+def create_or_update_storage_account(
+    *,
+    session: Session = Depends(get_session),
+    resourceGroupName: str,
+    account_name: str,
+    account_body: StorageAccountCreate,
+):
     """
-    Factory function to create a FastAPI route handler for a given endpoint.
+    Create or update a storage account (upsert).
     """
-    async def route_handler(request: Request) -> Any:
-        """
-        Dynamically created route handler for a GET request.
-        """
-        resource_key = request.url.path
+    statement = select(StorageAccount).where(
+        StorageAccount.name == account_name,
+        StorageAccount.resource_group == resourceGroupName,
+    )
+    db_account = session.exec(statement).first()
 
-        if resource_key not in in_memory_db:
-            response_schema = endpoint_info['response_schema']
-            spec = endpoint_info['spec']
-            mock_data = parser.generate_mock_data(schema=response_schema, spec=spec)
-            in_memory_db[resource_key] = mock_data
-
-        return in_memory_db[resource_key]
-
-    return route_handler
-
-def _setup_routes():
-    """
-    Parses the OpenAPI specs and dynamically creates routes for the storage service.
-    """
-    parser = OpenAPIParser(service_name="storage")
-    endpoints = parser.parse()
-    added_paths = set()
-
-    for endpoint in endpoints:
-        path = endpoint['path']
-        if path in added_paths:
-            continue
-
-        handler = _create_route_handler(parser, endpoint)
-
-        router.add_api_route(
-            path,
-            handler,
-            methods=["GET"],
-            summary=endpoint.get('operationId', 'No summary available'),
-            operation_id=endpoint.get('operationId')
+    if db_account:
+        # Update existing account
+        db_account.location = account_body.location
+        db_account.sku = account_body.sku.name
+        db_account.kind = account_body.kind
+    else:
+        # Create new account
+        db_account = StorageAccount(
+            name=account_name,
+            resource_group=resourceGroupName,
+            location=account_body.location,
+            sku=account_body.sku.name,
+            kind=account_body.kind,
         )
-        added_paths.add(path)
 
-# When this module is loaded, parse the specs and create the routes.
-# _setup_routes()  # Temporarily disabled pending DB refactor for this service.
+    session.add(db_account)
+    session.commit()
+    session.refresh(db_account)
+    return db_account
+
+@router.get("/storageAccounts/{account_name}", response_model=StorageAccount)
+def get_storage_account(
+    *,
+    session: Session = Depends(get_session),
+    resourceGroupName: str,
+    account_name: str,
+):
+    """
+    Get a specific storage account by name and resource group.
+    """
+    statement = select(StorageAccount).where(
+        StorageAccount.name == account_name,
+        StorageAccount.resource_group == resourceGroupName,
+    )
+    account = session.exec(statement).first()
+    if not account:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Storage account not found")
+    return account
+
+@router.get("/storageAccounts", response_model=List[StorageAccount])
+def list_storage_accounts_in_rg(
+    *,
+    session: Session = Depends(get_session),
+    resourceGroupName: str,
+):
+    """
+    List all storage accounts within a specific resource group.
+    """
+    statement = select(StorageAccount).where(StorageAccount.resource_group == resourceGroupName)
+    accounts = session.exec(statement).all()
+    return accounts
+
+@router.delete("/storageAccounts/{account_name}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_storage_account(
+    *,
+    session: Session = Depends(get_session),
+    resourceGroupName: str,
+    account_name: str,
+):
+    """
+    Delete a specific storage account.
+    """
+    statement = select(StorageAccount).where(
+        StorageAccount.name == account_name,
+        StorageAccount.resource_group == resourceGroupName,
+    )
+    account_to_delete = session.exec(statement).first()
+
+    if not account_to_delete:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Storage account not found")
+
+    session.delete(account_to_delete)
+    session.commit()
+    return None

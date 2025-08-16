@@ -1,53 +1,72 @@
 """
-Basic tests for the dynamically generated storage service endpoints.
-
-NOTE: These tests are temporarily disabled pending the refactor of the
-storage service to use the database for persistence.
+Tests for the database-driven storage service endpoints.
 """
-# import re
-# from fastapi.testclient import TestClient
-# from app.main import app
+from fastapi.testclient import TestClient
+from typing import Dict
 
-# client = TestClient(app)
+# All fixtures are provided by conftest.py
 
-# def _find_first_get_endpoint(prefix: str) -> str:
-#     """Finds the first registered GET endpoint with the given prefix."""
-#     for route in app.routes:
-#         if route.path.startswith(prefix) and "GET" in route.methods:
-#             return route.path
-#     return None
+def test_storage_account_lifecycle(client: TestClient, auth_headers: Dict[str, str]):
+    """
+    Tests the full lifecycle of a storage account resource.
+    """
+    subscription_id = "test-sub-123"
+    resource_group_name = "test-rg-sa-1"
+    account_name = "teststorageaccount01"
 
-# def _substitute_path_params(path: str) -> str:
-#     """Replaces path parameter placeholders with dummy string values."""
-#     return re.sub(r"\{(\w+)\}", r"test_\1", path)
+    api_path = f"/subscriptions/{subscription_id}/resourceGroups/{resource_group_name}/providers/Microsoft.Storage/storageAccounts/{account_name}"
 
-# def test_random_storage_get_endpoint():
-#     """
-#     Tests a dynamically generated GET endpoint for the storage service.
+    # 1. Create the Storage Account with PUT
+    sa_payload = {
+        "location": "eastus",
+        "sku": {"name": "Standard_LRS"},
+        "kind": "StorageV2"
+    }
+    response_put = client.put(api_path, json=sa_payload, headers=auth_headers)
+    # Azure returns 200 for update, 202 for create (accepted), 201 for create immediate
+    # For a simple mock, we'll just accept 200 for upsert
+    assert response_put.status_code == 200
+    created_data = response_put.json()
+    assert created_data["name"] == account_name
+    assert created_data["resource_group"] == resource_group_name
+    assert "id" in created_data
 
-#     It discovers a storage endpoint, sends a request to it, and asserts
-#     that the response is successful and contains data.
-#     """
-#     # Find a GET endpoint for the storage service to test
-#     endpoint_path = _find_first_get_endpoint("/storage")
-#     assert endpoint_path is not None, "No GET endpoints found for /storage to test."
+    # 2. Retrieve the created Storage Account with GET
+    response_get = client.get(api_path, headers=auth_headers)
+    assert response_get.status_code == 200
+    assert response_get.json() == created_data
 
-#     # Prepare the path by substituting any path parameters
-#     test_path = _substitute_path_params(endpoint_path)
+    # 3. List Storage Accounts in the resource group
+    list_path = f"/subscriptions/{subscription_id}/resourceGroups/{resource_group_name}/providers/Microsoft.Storage/storageAccounts"
+    response_list = client.get(list_path, headers=auth_headers)
+    assert response_list.status_code == 200
+    sa_list = response_list.json()
+    assert isinstance(sa_list, list)
+    assert any(sa["name"] == account_name for sa in sa_list)
 
-#     # Make the request
-#     response = client.get(test_path)
+    # 4. Delete the Storage Account
+    response_delete = client.delete(api_path, headers=auth_headers)
+    assert response_delete.status_code == 204
 
-#     # Assert the response
-#     assert response.status_code == 200
-#     response_data = response.json()
-#     assert response_data is not None
-#     assert isinstance(response_data, (dict, list))
-#     if isinstance(response_data, list):
-#         assert len(response_data) > 0
-#     else:
-#         assert len(response_data.keys()) > 0
+    # 5. Verify the Storage Account is gone
+    response_get_after_delete = client.get(api_path, headers=auth_headers)
+    assert response_get_after_delete.status_code == 404
 
-def test_placeholder():
-    """Placeholder test to ensure the test suite runs."""
-    assert True
+def test_storage_account_auth(client: TestClient):
+    """
+    Tests that unauthorized requests to the Storage Account endpoints are rejected.
+    """
+    api_path = "/subscriptions/test-sub-auth/resourceGroups/test-rg-auth/providers/Microsoft.Storage/storageAccounts/testsaauth"
+    sa_payload = {
+        "location": "eastus",
+        "sku": {"name": "Standard_LRS"},
+        "kind": "StorageV2"
+    }
+
+    # Test PUT without auth
+    response_no_auth = client.put(api_path, json=sa_payload)
+    assert response_no_auth.status_code == 401
+
+    # Test GET with bad token
+    response_bad_token = client.get(api_path, headers={"Authorization": "Bearer bad-token"})
+    assert response_bad_token.status_code == 401

@@ -13,7 +13,11 @@ class Settings(BaseSettings):
     """
     Manages application settings and environment variables.
     """
+    APP_ENV: str = "prod"
     API_SPECS_PATH: str = os.path.join(os.getcwd(), 'azure-rest-api-specs', 'specification')
+
+    # Security settings
+    MOCK_AUTH_TOKEN: str = "mock-token"
 
     # Database settings loaded from .env file
     POSTGRES_USER: str
@@ -39,6 +43,17 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """
     Returns a cached instance of the Settings object.
-    The settings are loaded from the environment and .env file only once.
+
+    If the APP_ENV environment variable is set to "test", it will return
+    a test-specific configuration with dummy values, bypassing .env loading.
+    Otherwise, it loads the production settings.
     """
+    if os.getenv("APP_ENV") == "test":
+        return Settings(
+            POSTGRES_USER="test",
+            POSTGRES_PASSWORD="test",
+            POSTGRES_DB="testdb",
+            DATABASE_HOST="localhost",
+            MOCK_AUTH_TOKEN="test-token"
+        )
     return Settings()
