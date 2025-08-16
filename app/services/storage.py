@@ -1,7 +1,8 @@
 """
-API routes for the Azure Storage service, using a database for persistence.
+API routes for the Azure Storage service, using a database for persistence
+and realistic, structured API paths.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session, select
 from typing import List
 
@@ -9,47 +10,110 @@ from app.db import get_session
 from app.models import StorageAccount
 from app.security import verify_token
 
+# Pydantic models for request bodies
+from pydantic import BaseModel
+class Sku(BaseModel):
+    name: str
+
+class StorageAccountCreate(BaseModel):
+    location: str
+    sku: Sku
+    kind: str
+
 router = APIRouter(
-    prefix="/storage",
+    prefix="/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Storage",
     tags=["storage"],
     dependencies=[Depends(verify_token)],
 )
 
-@router.post("/storageaccounts/", response_model=StorageAccount)
-def create_storage_account(
+@router.put("/storageAccounts/{account_name}", response_model=StorageAccount)
+def create_or_update_storage_account(
     *,
     session: Session = Depends(get_session),
-    account: StorageAccount
+    resourceGroupName: str,
+    account_name: str,
+    account_body: StorageAccountCreate,
 ):
     """
-    Create a new storage account resource in the database.
+    Create or update a storage account (upsert).
     """
-    session.add(account)
+    statement = select(StorageAccount).where(
+        StorageAccount.name == account_name,
+        StorageAccount.resource_group == resourceGroupName,
+    )
+    db_account = session.exec(statement).first()
+
+    if db_account:
+        # Update existing account
+        db_account.location = account_body.location
+        db_account.sku = account_body.sku.name
+        db_account.kind = account_body.kind
+    else:
+        # Create new account
+        db_account = StorageAccount(
+            name=account_name,
+            resource_group=resourceGroupName,
+            location=account_body.location,
+            sku=account_body.sku.name,
+            kind=account_body.kind,
+        )
+
+    session.add(db_account)
     session.commit()
-    session.refresh(account)
+    session.refresh(db_account)
+    return db_account
+
+@router.get("/storageAccounts/{account_name}", response_model=StorageAccount)
+def get_storage_account(
+    *,
+    session: Session = Depends(get_session),
+    resourceGroupName: str,
+    account_name: str,
+):
+    """
+    Get a specific storage account by name and resource group.
+    """
+    statement = select(StorageAccount).where(
+        StorageAccount.name == account_name,
+        StorageAccount.resource_group == resourceGroupName,
+    )
+    account = session.exec(statement).first()
+    if not account:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Storage account not found")
     return account
 
-@router.get("/storageaccounts/", response_model=List[StorageAccount])
-def list_storage_accounts(
+@router.get("/storageAccounts", response_model=List[StorageAccount])
+def list_storage_accounts_in_rg(
     *,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    resourceGroupName: str,
 ):
     """
-    List all storage account resources in the database.
+    List all storage accounts within a specific resource group.
     """
-    accounts = session.exec(select(StorageAccount)).all()
+    statement = select(StorageAccount).where(StorageAccount.resource_group == resourceGroupName)
+    accounts = session.exec(statement).all()
     return accounts
 
-@router.get("/storageaccounts/{account_id}", response_model=StorageAccount)
-def get_storage_account_by_id(
+@router.delete("/storageAccounts/{account_name}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_storage_account(
     *,
     session: Session = Depends(get_session),
-    account_id: int
+    resourceGroupName: str,
+    account_name: str,
 ):
     """
-    Retrieve a storage account by its database ID.
+    Delete a specific storage account.
     """
-    account = session.get(StorageAccount, account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Storage account not found")
-    return account
+    statement = select(StorageAccount).where(
+        StorageAccount.name == account_name,
+        StorageAccount.resource_group == resourceGroupName,
+    )
+    account_to_delete = session.exec(statement).first()
+
+    if not account_to_delete:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Storage account not found")
+
+    session.delete(account_to_delete)
+    session.commit()
+    return None

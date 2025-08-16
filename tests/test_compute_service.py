@@ -56,3 +56,29 @@ def test_vm_lifecycle(client: TestClient, auth_headers: Dict[str, str]):
     # 5. Verify the VM is gone (GET should now be 404)
     response_get_after_delete = client.get(api_path, headers=auth_headers)
     assert response_get_after_delete.status_code == 404
+
+def test_vm_auth(client: TestClient):
+    """
+    Tests that unauthorized and incorrectly authorized requests are rejected.
+    """
+    subscription_id = "test-sub-auth"
+    resource_group_name = "test-rg-auth"
+    vm_name = "test-vm-auth"
+    api_path = f"/subscriptions/{subscription_id}/resourceGroups/{resource_group_name}/providers/Microsoft.Compute/virtualMachines/{vm_name}"
+    vm_payload = {
+        "location": "eastus",
+        "properties": {"hardwareProfile": {"vmSize": "Standard_D2_v2"}}
+    }
+
+    # Test without any auth header
+    response_no_auth = client.put(api_path, json=vm_payload)
+    assert response_no_auth.status_code == 401
+    assert "WWW-Authenticate" in response_no_auth.headers
+
+    # Test with a bad token
+    response_bad_token = client.put(
+        api_path,
+        json=vm_payload,
+        headers={"Authorization": "Bearer bad-token"}
+    )
+    assert response_bad_token.status_code == 401

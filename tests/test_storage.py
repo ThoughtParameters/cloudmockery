@@ -6,74 +6,67 @@ from typing import Dict
 
 # All fixtures are provided by conftest.py
 
-def test_create_and_get_storage_account(client: TestClient, auth_headers: Dict[str, str]):
+def test_storage_account_lifecycle(client: TestClient, auth_headers: Dict[str, str]):
     """
-    Tests creating a storage account and then retrieving it.
+    Tests the full lifecycle of a storage account resource.
     """
-    account_payload = {
-        "name": "teststorageaccount01",
-        "resource_group": "test-rg-1",
+    subscription_id = "test-sub-123"
+    resource_group_name = "test-rg-sa-1"
+    account_name = "teststorageaccount01"
+
+    api_path = f"/subscriptions/{subscription_id}/resourceGroups/{resource_group_name}/providers/Microsoft.Storage/storageAccounts/{account_name}"
+
+    # 1. Create the Storage Account with PUT
+    sa_payload = {
         "location": "eastus",
-        "sku": "Standard_LRS",
-        "kind": "StorageV2",
+        "sku": {"name": "Standard_LRS"},
+        "kind": "StorageV2"
     }
-
-    # Create the Storage Account
-    response_create = client.post(
-        "/storage/storageaccounts/", json=account_payload, headers=auth_headers
-    )
-    assert response_create.status_code == 200
-    created_data = response_create.json()
-
-    # Verify the created data
+    response_put = client.put(api_path, json=sa_payload, headers=auth_headers)
+    # Azure returns 200 for update, 202 for create (accepted), 201 for create immediate
+    # For a simple mock, we'll just accept 200 for upsert
+    assert response_put.status_code == 200
+    created_data = response_put.json()
+    assert created_data["name"] == account_name
+    assert created_data["resource_group"] == resource_group_name
     assert "id" in created_data
-    assert created_data["name"] == account_payload["name"]
-    account_id = created_data["id"]
 
-    # Retrieve the Storage Account by its ID
-    response_get = client.get(f"/storage/storageaccounts/{account_id}", headers=auth_headers)
+    # 2. Retrieve the created Storage Account with GET
+    response_get = client.get(api_path, headers=auth_headers)
     assert response_get.status_code == 200
     assert response_get.json() == created_data
 
-def test_list_storage_accounts(client: TestClient, auth_headers: Dict[str, str]):
-    """
-    Tests listing storage accounts after creating one.
-    """
-    # Create a storage account to ensure the list is not empty
-    account_payload = {
-        "name": "teststorageaccount02",
-        "resource_group": "test-rg-2",
-        "location": "westus",
-        "sku": "Premium_LRS",
-        "kind": "BlockBlobStorage",
-    }
-    client.post("/storage/storageaccounts/", json=account_payload, headers=auth_headers)
+    # 3. List Storage Accounts in the resource group
+    list_path = f"/subscriptions/{subscription_id}/resourceGroups/{resource_group_name}/providers/Microsoft.Storage/storageAccounts"
+    response_list = client.get(list_path, headers=auth_headers)
+    assert response_list.status_code == 200
+    sa_list = response_list.json()
+    assert isinstance(sa_list, list)
+    assert any(sa["name"] == account_name for sa in sa_list)
 
-    response = client.get("/storage/storageaccounts/", headers=auth_headers)
-    assert response.status_code == 200
-    data = response.json()
-    assert isinstance(data, list)
-    assert len(data) > 0
-    assert any(item["name"] == "teststorageaccount02" for item in data)
+    # 4. Delete the Storage Account
+    response_delete = client.delete(api_path, headers=auth_headers)
+    assert response_delete.status_code == 204
 
-def test_get_nonexistent_storage_account(client: TestClient, auth_headers: Dict[str, str]):
-    """
-    Tests that requesting a storage account with an ID that does not exist
-    returns a 404 Not Found error.
-    """
-    response = client.get("/storage/storageaccounts/99999", headers=auth_headers)
-    assert response.status_code == 404
+    # 5. Verify the Storage Account is gone
+    response_get_after_delete = client.get(api_path, headers=auth_headers)
+    assert response_get_after_delete.status_code == 404
 
-def test_create_storage_account_unauthorized(client: TestClient):
+def test_storage_account_auth(client: TestClient):
     """
-    Tests that creating a storage account without an auth token fails with a 401 error.
+    Tests that unauthorized requests to the Storage Account endpoints are rejected.
     """
-    account_payload = {
-        "name": "unauthstorage",
-        "resource_group": "unauth-rg",
+    api_path = "/subscriptions/test-sub-auth/resourceGroups/test-rg-auth/providers/Microsoft.Storage/storageAccounts/testsaauth"
+    sa_payload = {
         "location": "eastus",
-        "sku": "Standard_LRS",
-        "kind": "StorageV2",
+        "sku": {"name": "Standard_LRS"},
+        "kind": "StorageV2"
     }
-    response = client.post("/storage/storageaccounts/", json=account_payload)  # No headers
-    assert response.status_code == 401
+
+    # Test PUT without auth
+    response_no_auth = client.put(api_path, json=sa_payload)
+    assert response_no_auth.status_code == 401
+
+    # Test GET with bad token
+    response_bad_token = client.get(api_path, headers={"Authorization": "Bearer bad-token"})
+    assert response_bad_token.status_code == 401

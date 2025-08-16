@@ -45,6 +45,7 @@ class Subnet(SQLModel, table=True):
 
 
 class VirtualNetwork(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("name", "resource_group", name="unique_vnet_in_rg"),)
     """Represents a virtual network resource in the database."""
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)

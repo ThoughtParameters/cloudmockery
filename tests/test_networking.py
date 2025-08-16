@@ -1,76 +1,76 @@
 """
-Tests for the database-driven networking service endpoints.
+Tests for the refactored, path-compliant networking service endpoints.
 """
 from fastapi.testclient import TestClient
 from typing import Dict
 
 # All fixtures are provided by conftest.py
 
-def test_create_and_get_vnet(client: TestClient, auth_headers: Dict[str, str]):
+def test_vnet_lifecycle(client: TestClient, auth_headers: Dict[str, str]):
     """
-    Tests creating a virtual network and then retrieving it.
+    Tests the full lifecycle of a virtual network resource:
+    PUT (create), GET (verify), GET (list), DELETE, GET (verify deletion).
     """
+    subscription_id = "test-sub-123"
+    resource_group_name = "test-rg-net-1"
+    vnet_name = "test-vnet-01"
+
+    # Define the API path for the specific VNet
+    api_path = f"/subscriptions/{subscription_id}/resourceGroups/{resource_group_name}/providers/Microsoft.Network/virtualNetworks/{vnet_name}"
+
+    # 1. Create the VNet with PUT
     vnet_payload = {
-        "name": "test-vnet-01",
-        "resource_group": "test-rg-1",
-        "location": "eastus",
-        "address_space": "10.0.0.0/16",
+        "location": "westus",
+        "properties": {
+            "addressSpace": {
+                "addressPrefixes": ["10.1.0.0/16"]
+            }
+        }
     }
-
-    # Create the VNet
-    response_create = client.post(
-        "/networking/virtualnetworks/", json=vnet_payload, headers=auth_headers
-    )
-    assert response_create.status_code == 200
-    created_data = response_create.json()
-
-    # Verify the created data
+    response_put = client.put(api_path, json=vnet_payload, headers=auth_headers)
+    assert response_put.status_code == 200
+    created_data = response_put.json()
+    assert created_data["name"] == vnet_name
+    assert created_data["resource_group"] == resource_group_name
+    assert created_data["location"] == vnet_payload["location"]
     assert "id" in created_data
-    assert created_data["name"] == vnet_payload["name"]
-    vnet_id = created_data["id"]
 
-    # Retrieve the VNet by its ID
-    response_get = client.get(f"/networking/virtualnetworks/{vnet_id}", headers=auth_headers)
+    # 2. Retrieve the created VNet with GET
+    response_get = client.get(api_path, headers=auth_headers)
     assert response_get.status_code == 200
     assert response_get.json() == created_data
 
-def test_list_vnets(client: TestClient, auth_headers: Dict[str, str]):
+    # 3. List VNets in the resource group and find the new one
+    list_path = f"/subscriptions/{subscription_id}/resourceGroups/{resource_group_name}/providers/Microsoft.Network/virtualNetworks"
+    response_list = client.get(list_path, headers=auth_headers)
+    assert response_list.status_code == 200
+    vnet_list = response_list.json()
+    assert isinstance(vnet_list, list)
+    assert len(vnet_list) > 0
+    assert any(vnet["name"] == vnet_name for vnet in vnet_list)
+
+    # 4. Delete the VNet
+    response_delete = client.delete(api_path, headers=auth_headers)
+    assert response_delete.status_code == 204
+
+    # 5. Verify the VNet is gone (GET should now be 404)
+    response_get_after_delete = client.get(api_path, headers=auth_headers)
+    assert response_get_after_delete.status_code == 404
+
+def test_vnet_auth(client: TestClient):
     """
-    Tests listing virtual networks after creating one.
+    Tests that unauthorized requests to the VNet endpoints are rejected.
     """
-    # Create a VNet to ensure the list is not empty
+    api_path = "/subscriptions/test-sub-auth/resourceGroups/test-rg-auth/providers/Microsoft.Network/virtualNetworks/test-vnet-auth"
     vnet_payload = {
-        "name": "test-vnet-02",
-        "resource_group": "test-rg-2",
         "location": "westus",
-        "address_space": "192.168.0.0/16",
+        "properties": {"addressSpace": {"addressPrefixes": ["10.2.0.0/16"]}}
     }
-    client.post("/networking/virtualnetworks/", json=vnet_payload, headers=auth_headers)
 
-    response = client.get("/networking/virtualnetworks/", headers=auth_headers)
-    assert response.status_code == 200
-    data = response.json()
-    assert isinstance(data, list)
-    assert len(data) > 0
-    assert any(item["name"] == "test-vnet-02" for item in data)
+    # Test PUT without auth
+    response_no_auth = client.put(api_path, json=vnet_payload)
+    assert response_no_auth.status_code == 401
 
-def test_get_nonexistent_vnet(client: TestClient, auth_headers: Dict[str, str]):
-    """
-    Tests that requesting a VNet with an ID that does not exist
-    returns a 404 Not Found error.
-    """
-    response = client.get("/networking/virtualnetworks/99999", headers=auth_headers)
-    assert response.status_code == 404
-
-def test_create_vnet_unauthorized(client: TestClient):
-    """
-    Tests that creating a VNet without an auth token fails with a 401 error.
-    """
-    vnet_payload = {
-        "name": "unauth-vnet",
-        "resource_group": "unauth-rg",
-        "location": "eastus",
-        "address_space": "172.16.0.0/16",
-    }
-    response = client.post("/networking/virtualnetworks/", json=vnet_payload)  # No headers
-    assert response.status_code == 401
+    # Test GET with bad token
+    response_bad_token = client.get(api_path, headers={"Authorization": "Bearer bad-token"})
+    assert response_bad_token.status_code == 401
